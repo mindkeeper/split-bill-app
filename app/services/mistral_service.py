@@ -4,10 +4,13 @@ import tempfile
 import aiofiles
 from typing import Optional, Dict, Any
 from mistralai import Mistral
-from models import BillInfo, ProcessingStatus
+from app.models.schemas import BillInfo, ProcessingStatus
 import json
 import re
 import base64
+from app.core.config import settings
+from app.core.exceptions import OCRProcessingError, APIKeyError
+from app.models.schemas import BillInfo, BillItem, ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -15,26 +18,21 @@ class MistralOCRService:
     """Service for handling Mistral OCR operations"""
 
     def __init__(self):
-        self.api_key = os.getenv("MISTRAL_API_KEY")
-        if not self.api_key:
-            raise ValueError("MISTRAL_API_KEY environment variable is required")
+        self.api_key = settings.mistral_api_key
+        if not self.api_key or self.api_key == "your_mistral_api_key_here":
+            raise APIKeyError("Mistral API key not configured. Please set MISTRAL_API_KEY environment variable.")
 
         try:
             logger.info("Initializing Mistral client...")
             self.client = Mistral(api_key=self.api_key)
             logger.info(f"Mistral client initialized successfully. Client type: {type(self.client)}")
-            
-            # Check if OCR attribute exists
-            if hasattr(self.client, 'ocr'):
-                logger.info("OCR attribute found on Mistral client")
-            else:
-                logger.warning("OCR attribute NOT found on Mistral client")
-                
+
+            # Use the correct model name for OCR
             self.model = "mistral-ocr-latest"  # Mistral's OCR model
             logger.info(f"Mistral OCR service initialized with model: {self.model}")
         except Exception as e:
             logger.error(f"Failed to initialize Mistral client: {e}")
-            raise
+            raise OCRProcessingError(f"Failed to initialize Mistral client: {e}")
 
     async def process_image_from_bytes(self, image_bytes: bytes, filename: str) -> Dict[str, Any]:
         """
@@ -75,7 +73,7 @@ class MistralOCRService:
 
     async def _process_with_mistral(self, image_path: str) -> Dict[str, Any]:
         """
-        Process image using Mistral's OCR API
+        Process image using Mistral's vision model for OCR
 
         Args:
             image_path: Path to the image file
@@ -96,14 +94,14 @@ class MistralOCRService:
                 mime_type = 'image/jpeg'
             elif file_ext == '.png':
                 mime_type = 'image/png'
-            elif file_ext == '.avif':
-                mime_type = 'image/avif'
+            elif file_ext == '.webp':
+                mime_type = 'image/webp'
             else:
                 mime_type = 'image/jpeg'  # Default fallback
 
-            # Use Mistral OCR API for text extraction
+            # Use Mistral's OCR API
             ocr_response = self.client.ocr.process(
-                model="mistral-ocr-latest",
+                model=self.model,
                 document={
                     "type": "image_url",
                     "image_url": f"data:{mime_type};base64,{image_base64}"
@@ -113,19 +111,13 @@ class MistralOCRService:
 
             # Extract text from OCR response
             raw_text = ""
-            if hasattr(ocr_response, 'text') and ocr_response.text:
+            if hasattr(ocr_response, 'text'):
                 raw_text = ocr_response.text
-            elif hasattr(ocr_response, 'content') and ocr_response.content:
+            elif hasattr(ocr_response, 'content'):
                 raw_text = ocr_response.content
-            elif hasattr(ocr_response, 'choices') and ocr_response.choices:
-                raw_text = ocr_response.choices[0].message.content if ocr_response.choices[0].message else ""
-            elif hasattr(ocr_response, 'pages') and ocr_response.pages:
-                # Extract text from pages if available
-                raw_text = "\n".join([page.get('text', '') for page in ocr_response.pages if page.get('text')])
             else:
-                # Fallback: convert response to string
                 raw_text = str(ocr_response)
-
+            
             if not raw_text or raw_text.strip() == "":
                 raise Exception("No text extracted from image")
 
@@ -140,20 +132,14 @@ class MistralOCRService:
                 "raw_text": raw_text,
                 "bill_info": bill_info,
                 "ocr_metadata": {
-                    "model": ocr_response.model if hasattr(ocr_response, 'model') else self.model,
-                    "pages_processed": len(ocr_response.pages) if hasattr(ocr_response, 'pages') else 1
+                    "model": self.model,
+                    "usage": ocr_response.usage.__dict__ if hasattr(ocr_response, 'usage') else None
                 }
             }
 
         except Exception as e:
             logger.error(f"Error in Mistral OCR processing: {str(e)}")
-            return {
-                "status": ProcessingStatus.ERROR,
-                "message": f"Mistral OCR processing failed: {str(e)}",
-                "raw_text": None,
-                "bill_info": None,
-                "error_details": str(e)
-            }
+            raise OCRProcessingError(f"Mistral OCR processing failed: {str(e)}")
 
     async def _extract_bill_info_from_text(self, ocr_text: str) -> Optional[BillInfo]:
         """
