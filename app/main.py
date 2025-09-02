@@ -13,6 +13,7 @@ from app.core.exceptions import (
     RateLimitError,
     AuthenticationError,
     AuthorizationError,
+    ServiceUnavailableError,
     ResourceNotFoundError,
     ConflictError,
     BadRequestError
@@ -62,7 +63,7 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitError):
     
     error_response = create_error_response(
         message=exc.detail,
-        error_code="RateLimitExceeded",
+        error_code="RATE_LIMIT_EXCEEDED",
         request_id=generate_request_id()
     )
     
@@ -79,7 +80,7 @@ async def authentication_exception_handler(request: Request, exc: Authentication
     
     error_response = create_error_response(
         message=exc.detail,
-        error_code="AuthenticationFailed",
+        error_code="AUTHENTICATION_FAILED",
         request_id=generate_request_id()
     )
     
@@ -96,7 +97,23 @@ async def authorization_exception_handler(request: Request, exc: AuthorizationEr
     
     error_response = create_error_response(
         message=exc.detail,
-        error_code="AccessDenied",
+        error_code="ACCESS_DENIED",
+        request_id=generate_request_id()
+    )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_response.model_dump(mode='json')
+    )
+
+@app.exception_handler(ServiceUnavailableError)
+async def service_unavailable_exception_handler(request: Request, exc: ServiceUnavailableError):
+    """Handle service unavailable exceptions"""
+    logger.warning(f"Service unavailable: {exc.detail}")
+    
+    error_response = create_error_response(
+        message=exc.detail,
+        error_code="SERVICE_UNAVAILABLE",
         request_id=generate_request_id()
     )
     
@@ -112,7 +129,7 @@ async def resource_not_found_exception_handler(request: Request, exc: ResourceNo
     
     error_response = create_error_response(
         message=exc.detail,
-        error_code="ResourceNotFound",
+        error_code="RESOURCE_NOT_FOUND",
         request_id=generate_request_id()
     )
     
@@ -128,7 +145,7 @@ async def conflict_exception_handler(request: Request, exc: ConflictError):
     
     error_response = create_error_response(
         message=exc.detail,
-        error_code="ConflictError",
+        error_code="CONFLICT_ERROR",
         request_id=generate_request_id()
     )
     
@@ -144,7 +161,7 @@ async def bad_request_exception_handler(request: Request, exc: BadRequestError):
     
     error_response = create_error_response(
         message=exc.detail,
-        error_code="BadRequest",
+        error_code="BAD_REQUEST",
         request_id=generate_request_id()
     )
     
@@ -160,7 +177,7 @@ async def split_bill_exception_handler(request: Request, exc: SplitBillException
     
     error_response = create_error_response(
         message=exc.detail,
-        error_code=exc.__class__.__name__,
+        error_code="SPLIT_BILL_ERROR",
         request_id=generate_request_id()
     )
     

@@ -7,7 +7,7 @@ import logging
 
 from app.models.responses import OCRResponse, UploadResponse, MultipleBillsResponse
 from app.core.dependencies import get_mistral_service
-from app.core.exceptions import FileValidationError, OCRProcessingError
+from app.core.exceptions import FileValidationError, OCRProcessingError, ServiceUnavailableError, AuthorizationError, RateLimitError
 from app.services.mistral_service import MistralOCRService
 from app.utils.file_validation import validate_image_file, get_file_info
 from app.utils.response_utils import (
@@ -68,6 +68,15 @@ async def process_bill_image(
     except FileValidationError as e:
         logger.warning(f"File validation failed: {str(e)} (Request ID: {request_id})")
         raise e
+    except ServiceUnavailableError as e:
+        logger.error(f"Service unavailable: {str(e)} (Request ID: {request_id})")
+        raise e
+    except AuthorizationError as e:
+        logger.error(f"Authorization failed: {str(e)} (Request ID: {request_id})")
+        raise e
+    except RateLimitError as e:
+        logger.error(f"Rate limit exceeded: {str(e)} (Request ID: {request_id})")
+        raise e
     except OCRProcessingError as e:
         logger.error(f"OCR processing failed: {str(e)} (Request ID: {request_id})")
         raise e
@@ -126,7 +135,7 @@ async def process_multiple_bills(
             successful_count += 1
             logger.info(f"Successfully processed file {i+1}/{len(files)}: {file.filename}")
             
-        except (FileValidationError, OCRProcessingError) as e:
+        except (FileValidationError, OCRProcessingError, ServiceUnavailableError, AuthorizationError, RateLimitError) as e:
             error_msg = f"File {file.filename}: {str(e)}"
             errors.append(error_msg)
             failed_count += 1

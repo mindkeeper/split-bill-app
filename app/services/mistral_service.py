@@ -9,7 +9,7 @@ import json
 import re
 import base64
 from app.core.config import settings
-from app.core.exceptions import OCRProcessingError, APIKeyError
+from app.core.exceptions import OCRProcessingError, APIKeyError, ServiceUnavailableError, AuthorizationError, RateLimitError
 from app.models.schemas import BillInfo, BillItem, ProcessingStatus
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,10 @@ class MistralOCRService:
                 if os.path.exists(temp_file_path):
                     os.unlink(temp_file_path)
 
+        except (ServiceUnavailableError, AuthorizationError, RateLimitError) as e:
+            # Re-raise authentication/authorization/rate limit errors to be handled by FastAPI
+            logger.error(f"API error processing image: {str(e)}")
+            raise e
         except Exception as e:
             logger.error(f"Error processing image: {str(e)}")
             return {
@@ -138,8 +142,26 @@ class MistralOCRService:
             }
 
         except Exception as e:
-            logger.error(f"Error in Mistral OCR processing: {str(e)}")
-            raise OCRProcessingError(f"Mistral OCR processing failed: {str(e)}")
+            error_message = str(e)
+            logger.error(f"Error in Mistral OCR processing: {error_message}")
+            
+            # Check for authentication errors (401 Unauthorized) - treat as service unavailable
+            if "401" in error_message or "Unauthorized" in error_message:
+                from app.core.exceptions import ServiceUnavailableError
+                raise ServiceUnavailableError("OCR service temporarily unavailable. Please try again later.")
+            
+            # Check for other API errors that should be handled differently
+            elif "403" in error_message or "Forbidden" in error_message:
+                from app.core.exceptions import AuthorizationError
+                raise AuthorizationError("Mistral API access forbidden. Please check your API permissions.")
+            
+            elif "429" in error_message or "rate limit" in error_message.lower():
+                from app.core.exceptions import RateLimitError
+                raise RateLimitError("Mistral", retry_after=60)
+            
+            # For all other errors, use OCRProcessingError
+            else:
+                raise OCRProcessingError(f"Mistral OCR processing failed: {error_message}")
 
     async def _extract_bill_info_from_text(self, ocr_text: str) -> Optional[BillInfo]:
         """
